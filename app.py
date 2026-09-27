@@ -3,46 +3,13 @@ from google import genai
 from pypdf import PdfReader
 import sqlite3
 import time
+from datetime import datetime
 
 st.set_page_config(
     page_title="AI Study Buddy",
     page_icon="📚",
     layout="wide"
 )
-
-# ============================================================
-# SIMPLE LOGIN
-# ============================================================
-
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-if "username" not in st.session_state:
-    st.session_state.username = ""
-
-if not st.session_state.logged_in:
-
-    st.title("📚 AI Study Buddy")
-
-    st.write("### 🔐 Sign In")
-
-    name = st.text_input("Enter your name")
-
-    if st.button("Continue"):
-
-        if name.strip():
-
-            st.session_state.logged_in = True
-            st.session_state.username = name.strip()
-
-            st.rerun()
-
-        else:
-
-            st.warning("Please enter your name.")
-
-    st.stop()
-
 
 # ============================================================
 # DATABASE
@@ -52,34 +19,35 @@ DATABASE = "visits.db"
 
 
 def setup_database():
-
     connection = sqlite3.connect(DATABASE)
-
     cursor = connection.cursor()
 
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT,
-            visit_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            username TEXT NOT NULL,
+            visit_time TEXT NOT NULL
         )
-        """
-    )
+    """)
 
     connection.commit()
     connection.close()
 
 
 def record_visit(username):
-
     connection = sqlite3.connect(DATABASE)
-
     cursor = connection.cursor()
 
+    current_time = datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
     cursor.execute(
-        "INSERT INTO visits (username) VALUES (?)",
-        (username,)
+        """
+        INSERT INTO visits (username, visit_time)
+        VALUES (?, ?)
+        """,
+        (username, current_time)
     )
 
     connection.commit()
@@ -87,9 +55,7 @@ def record_visit(username):
 
 
 def get_total_visits():
-
     connection = sqlite3.connect(DATABASE)
-
     cursor = connection.cursor()
 
     cursor.execute(
@@ -104,13 +70,15 @@ def get_total_visits():
 
 
 def get_user_visits(username):
-
     connection = sqlite3.connect(DATABASE)
-
     cursor = connection.cursor()
 
     cursor.execute(
-        "SELECT COUNT(*) FROM visits WHERE username = ?",
+        """
+        SELECT COUNT(*)
+        FROM visits
+        WHERE username = ?
+        """,
         (username,)
     )
 
@@ -121,11 +89,91 @@ def get_user_visits(username):
     return total
 
 
+def get_visitor_summary():
+    connection = sqlite3.connect(DATABASE)
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT username, COUNT(*) AS visits
+        FROM visits
+        GROUP BY username
+        ORDER BY visits DESC
+        """
+    )
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    return rows
+
+
+def get_visit_history():
+    connection = sqlite3.connect(DATABASE)
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT username, visit_time
+        FROM visits
+        ORDER BY id DESC
+        """
+    )
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    return rows
+
+
 setup_database()
 
 
 # ============================================================
-# RECORD VISIT ONCE PER SESSION
+# SIMPLE LOGIN
+# ============================================================
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if "username" not in st.session_state:
+    st.session_state.username = ""
+
+
+if not st.session_state.logged_in:
+
+    st.title("📚 AI Study Buddy")
+
+    st.write("### 🔐 Sign In")
+
+    name = st.text_input(
+        "Enter your name"
+    )
+
+    if st.button("Continue"):
+
+        if name.strip():
+
+            st.session_state.logged_in = True
+            st.session_state.username = name.strip()
+
+            st.rerun()
+
+        else:
+
+            st.warning(
+                "Please enter your name."
+            )
+
+    st.stop()
+
+
+# ============================================================
+# RECORD VISIT
 # ============================================================
 
 if "visit_recorded" not in st.session_state:
@@ -135,13 +183,6 @@ if "visit_recorded" not in st.session_state:
     )
 
     st.session_state.visit_recorded = True
-
-
-user_visits = get_user_visits(
-    st.session_state.username
-)
-
-total_visits = get_total_visits()
 
 
 # ============================================================
@@ -158,15 +199,47 @@ st.sidebar.divider()
 
 st.sidebar.metric(
     "Your Visits",
-    user_visits
+    get_user_visits(
+        st.session_state.username
+    )
 )
 
 st.sidebar.metric(
     "Total Visits",
-    total_visits
+    get_total_visits()
 )
 
 st.sidebar.divider()
+
+
+# ============================================================
+# ADMIN DASHBOARD
+# ============================================================
+
+st.sidebar.subheader("⚙️ Admin")
+
+admin_password = st.sidebar.text_input(
+    "Admin Password",
+    type="password"
+)
+
+ADMIN_PASSWORD = "CHANGE_THIS_PASSWORD"
+
+
+if admin_password == ADMIN_PASSWORD:
+
+    show_admin = st.sidebar.checkbox(
+        "📊 Open Admin Dashboard"
+    )
+
+else:
+
+    show_admin = False
+
+
+# ============================================================
+# LOGOUT
+# ============================================================
 
 if st.sidebar.button("🚪 Log Out"):
 
@@ -178,7 +251,133 @@ if st.sidebar.button("🚪 Log Out"):
 
 
 # ============================================================
-# GEMINI API
+# ADMIN PAGE
+# ============================================================
+
+if show_admin:
+
+    st.title("📊 Visitor Dashboard")
+
+    st.write(
+        "Admin-only visitor statistics."
+    )
+
+    st.divider()
+
+    total_visits = get_total_visits()
+
+    visitor_summary = get_visitor_summary()
+
+    visit_history = get_visit_history()
+
+    # --------------------------------------------------------
+    # TOP STATISTICS
+    # --------------------------------------------------------
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        st.metric(
+            "Total Visits",
+            total_visits
+        )
+
+    with col2:
+
+        st.metric(
+            "Unique Visitors",
+            len(visitor_summary)
+        )
+
+    with col3:
+
+        if visitor_summary:
+
+            most_active = visitor_summary[0][0]
+
+        else:
+
+            most_active = "None"
+
+        st.metric(
+            "Most Visits",
+            most_active
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # VISITS BY USER
+    # --------------------------------------------------------
+
+    st.subheader(
+        "👥 Visits by User"
+    )
+
+    if visitor_summary:
+
+        for username, visits in visitor_summary:
+
+            col1, col2 = st.columns(
+                [3, 1]
+            )
+
+            with col1:
+
+                st.write(
+                    f"👤 {username}"
+                )
+
+            with col2:
+
+                st.write(
+                    f"**{visits} visits**"
+                )
+
+    else:
+
+        st.info(
+            "No visitors yet."
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # VISIT HISTORY
+    # --------------------------------------------------------
+
+    st.subheader(
+        "🕒 Visit History"
+    )
+
+    if visit_history:
+
+        for username, visit_time in visit_history:
+
+            st.write(
+                f"👤 **{username}** — {visit_time}"
+            )
+
+    else:
+
+        st.info(
+            "No visit history yet."
+        )
+
+    st.divider()
+
+    if st.button(
+        "🔄 Refresh Dashboard"
+    ):
+
+        st.rerun()
+
+    st.stop()
+
+
+# ============================================================
+# GEMINI
 # ============================================================
 
 try:
@@ -259,7 +458,9 @@ st.write(
 # STUDY SETTINGS
 # ============================================================
 
-st.sidebar.subheader("Study Settings")
+st.sidebar.subheader(
+    "Study Settings"
+)
 
 mode = st.sidebar.selectbox(
     "What do you want to do?",
@@ -293,7 +494,9 @@ notes = ""
 
 if uploaded_file:
 
-    with st.spinner("📖 Reading your notes..."):
+    with st.spinner(
+        "📖 Reading your notes..."
+    ):
 
         reader = PdfReader(
             uploaded_file
@@ -323,19 +526,23 @@ if uploaded_file:
 
 
 # ============================================================
-# EXPLAIN NOTES
+# EXPLAIN
 # ============================================================
 
 if uploaded_file and mode == "Explain my notes":
 
-    if st.button("🧠 Explain My Notes"):
+    if st.button(
+        "🧠 Explain My Notes"
+    ):
 
         prompt = f"""
 You are an expert tutor.
 
-Explain the following study material clearly and simply.
+Explain the following study material clearly
+and simply.
 
 Use:
+
 - Simple language
 - Important definitions
 - Examples
@@ -357,7 +564,9 @@ STUDY MATERIAL:
 
         if answer:
 
-            st.subheader("🧠 Explanation")
+            st.subheader(
+                "🧠 Explanation"
+            )
 
             st.markdown(answer)
 
@@ -368,7 +577,9 @@ STUDY MATERIAL:
 
 elif uploaded_file and mode == "Make flashcards":
 
-    if st.button("🃏 Generate Flashcards"):
+    if st.button(
+        "🃏 Generate Flashcards"
+    ):
 
         prompt = f"""
 You are a study assistant.
@@ -402,7 +613,9 @@ STUDY MATERIAL:
 
         if answer:
 
-            st.subheader("🃏 Flashcards")
+            st.subheader(
+                "🃏 Flashcards"
+            )
 
             st.markdown(answer)
 
@@ -413,7 +626,9 @@ STUDY MATERIAL:
 
 elif uploaded_file and mode == "Create a quiz":
 
-    if st.button("❓ Generate Quiz"):
+    if st.button(
+        "❓ Generate Quiz"
+    ):
 
         prompt = f"""
 You are an expert teacher.
@@ -422,11 +637,12 @@ Create a {num_questions}-question practice quiz
 based ONLY on the study material.
 
 Use a mixture of:
+
 - Multiple choice
 - True/false
 - Short answer
 
-Do not provide the answers immediately after
+Do not provide answers immediately after
 each question.
 
 At the end create:
@@ -448,7 +664,9 @@ STUDY MATERIAL:
 
         if answer:
 
-            st.subheader("❓ Practice Quiz")
+            st.subheader(
+                "❓ Practice Quiz"
+            )
 
             st.markdown(answer)
 
@@ -459,12 +677,15 @@ STUDY MATERIAL:
 
 elif uploaded_file and mode == "Study guide":
 
-    if st.button("📖 Create Study Guide"):
+    if st.button(
+        "📖 Create Study Guide"
+    ):
 
         prompt = f"""
 You are an expert study coach.
 
-Turn the following material into a clear study guide.
+Turn the following material into a clear
+study guide.
 
 Include:
 
@@ -491,7 +712,9 @@ STUDY MATERIAL:
 
         if answer:
 
-            st.subheader("📖 Study Guide")
+            st.subheader(
+                "📖 Study Guide"
+            )
 
             st.markdown(answer)
 
