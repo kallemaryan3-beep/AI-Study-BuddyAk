@@ -10,18 +10,44 @@ st.set_page_config(
     layout="wide"
 )
 
-# =========================
-# DATABASE
-# =========================
+# ============================================================
+# GOOGLE LOGIN
+# ============================================================
+
+if not st.user.is_logged_in:
+    st.title("📚 AI Study Buddy")
+    st.write("Sign in with Google to continue.")
+
+    st.button(
+        "🔐 Sign in with Google",
+        on_click=st.login
+    )
+
+    st.stop()
+
+# ============================================================
+# USER INFORMATION
+# ============================================================
+
+user_name = st.user.name
+user_email = st.user.email
+
+# ============================================================
+# VISIT DATABASE
+# ============================================================
+
+DATABASE = "visits.db"
+
 
 def setup_database():
-    conn = sqlite3.connect("visits.db")
+    conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS visits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT
+        CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            name TEXT,
+            visits INTEGER DEFAULT 0
         )
     """)
 
@@ -29,112 +55,123 @@ def setup_database():
     conn.close()
 
 
-def add_visit(name):
-    conn = sqlite3.connect("visits.db")
+def record_visit(email, name):
+    conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
 
     cursor.execute(
-        "INSERT INTO visits (name) VALUES (?)",
-        (name,)
+        "SELECT visits FROM users WHERE email = ?",
+        (email,)
     )
+
+    result = cursor.fetchone()
+
+    if result is None:
+        visits = 1
+
+        cursor.execute(
+            """
+            INSERT INTO users (email, name, visits)
+            VALUES (?, ?, ?)
+            """,
+            (email, name, visits)
+        )
+    else:
+        visits = result[0] + 1
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET name = ?, visits = ?
+            WHERE email = ?
+            """,
+            (name, visits, email)
+        )
 
     conn.commit()
     conn.close()
 
+    return visits
 
-def get_visits():
-    conn = sqlite3.connect("visits.db")
+
+def get_total_visits():
+    conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
 
-    cursor.execute("SELECT COUNT(*) FROM visits")
-    result = cursor.fetchone()[0]
+    cursor.execute(
+        "SELECT COALESCE(SUM(visits), 0) FROM users"
+    )
+
+    total = cursor.fetchone()[0]
 
     conn.close()
 
-    return result
+    return total
 
 
 setup_database()
 
-# =========================
-# SIMPLE LOGIN
-# =========================
+# ============================================================
+# COUNT VISIT ONCE PER SESSION
+# ============================================================
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+if "visit_recorded" not in st.session_state:
 
-if "username" not in st.session_state:
-    st.session_state.username = ""
-
-
-if not st.session_state.logged_in:
-
-    st.title("📚 AI Study Buddy")
-
-    st.write("### 🔐 Login")
-
-    name = st.text_input(
-        "Enter your name"
+    st.session_state.my_visits = record_visit(
+        user_email,
+        user_name
     )
 
-    if st.button("Login"):
+    st.session_state.visit_recorded = True
 
-        if name.strip():
+my_visits = st.session_state.my_visits
+total_visits = get_total_visits()
 
-            st.session_state.logged_in = True
-            st.session_state.username = name.strip()
-
-            add_visit(name.strip())
-
-            st.rerun()
-
-        else:
-
-            st.warning(
-                "Please enter your name."
-            )
-
-    st.stop()
-
-
-# =========================
+# ============================================================
 # SIDEBAR
-# =========================
+# ============================================================
 
 st.sidebar.title("📚 AI Study Buddy")
 
 st.sidebar.write(
-    f"👋 Hello, {st.session_state.username}!"
+    f"👋 {user_name}"
+)
+
+st.sidebar.write(
+    f"📧 {user_email}"
+)
+
+st.sidebar.divider()
+
+st.sidebar.metric(
+    "Your Visits",
+    my_visits
 )
 
 st.sidebar.metric(
     "Total Visits",
-    get_visits()
+    total_visits
 )
 
-if st.sidebar.button("Log Out"):
+st.sidebar.divider()
 
-    st.session_state.logged_in = False
-    st.session_state.username = ""
+st.sidebar.button(
+    "🚪 Sign Out",
+    on_click=st.logout
+)
 
-    st.rerun()
-
-
-# =========================
+# ============================================================
 # GEMINI
-# =========================
+# ============================================================
 
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 
 except Exception:
-
     st.error(
         "GEMINI_API_KEY is not configured in Streamlit Secrets."
     )
-
     st.stop()
-
 
 client = genai.Client(
     api_key=api_key
@@ -167,9 +204,7 @@ def ask_ai(prompt):
             ):
 
                 if attempt < 2:
-
                     time.sleep(2)
-
                     continue
 
             st.error(
@@ -180,10 +215,9 @@ def ask_ai(prompt):
 
     return None
 
-
-# =========================
+# ============================================================
 # MAIN APP
-# =========================
+# ============================================================
 
 st.title("📚 AI Study Buddy")
 
@@ -191,10 +225,9 @@ st.write(
     "Upload your notes or PDF and let AI help you study."
 )
 
-
-# =========================
-# SETTINGS
-# =========================
+# ============================================================
+# STUDY SETTINGS
+# ============================================================
 
 st.sidebar.subheader(
     "Study Settings"
@@ -217,10 +250,9 @@ num_questions = st.sidebar.slider(
     value=10
 )
 
-
-# =========================
-# PDF
-# =========================
+# ============================================================
+# PDF UPLOAD
+# ============================================================
 
 uploaded_file = st.file_uploader(
     "📄 Upload your notes or PDF",
@@ -229,23 +261,18 @@ uploaded_file = st.file_uploader(
 
 notes = ""
 
-
 if uploaded_file:
 
-    with st.spinner(
-        "📖 Reading your notes..."
-    ):
+    with st.spinner("📖 Reading your notes..."):
 
-        reader = PdfReader(
-            uploaded_file
-        )
+        reader = PdfReader(uploaded_file)
 
         for page in reader.pages:
 
-            text = page.extract_text()
+            page_text = page.extract_text()
 
-            if text:
-                notes += text + "\n"
+            if page_text:
+                notes += page_text + "\n"
 
     if not notes.strip():
 
@@ -261,21 +288,18 @@ if uploaded_file:
         "✅ Your notes are ready!"
     )
 
+    # ========================================================
+    # EXPLAIN
+    # ========================================================
 
-# =========================
-# EXPLAIN NOTES
-# =========================
+    if mode == "Explain my notes":
 
-if uploaded_file and mode == "Explain my notes":
+        if st.button("🧠 Explain My Notes"):
 
-    if st.button(
-        "🧠 Explain My Notes"
-    ):
-
-        prompt = f"""
+            prompt = f"""
 You are an expert tutor.
 
-Explain these study notes clearly and simply.
+Explain the following study material clearly and simply.
 
 Use:
 - Simple language
@@ -284,99 +308,89 @@ Use:
 - Key ideas
 - A short summary
 
-Only use information found in the study material.
+Only use information supported by the study material.
 
 STUDY MATERIAL:
 
 {notes}
 """
 
-        with st.spinner(
-            "🧠 Creating explanation..."
-        ):
+            with st.spinner(
+                "🧠 Creating explanation..."
+            ):
 
-            answer = ask_ai(prompt)
+                answer = ask_ai(prompt)
 
-        if answer:
+            if answer:
 
-            st.subheader(
-                "🧠 Explanation"
-            )
+                st.subheader(
+                    "🧠 Explanation"
+                )
 
-            st.markdown(answer)
+                st.markdown(answer)
 
+    # ========================================================
+    # FLASHCARDS
+    # ========================================================
 
-# =========================
-# FLASHCARDS
-# =========================
+    elif mode == "Make flashcards":
 
-elif uploaded_file and mode == "Make flashcards":
+        if st.button("🃏 Generate Flashcards"):
 
-    if st.button(
-        "🃏 Generate Flashcards"
-    ):
-
-        prompt = f"""
+            prompt = f"""
 You are a study assistant.
 
-Create useful flashcards from these notes.
+Create useful flashcards from the study material.
 
-Format them like:
+Format each card like:
 
 ### Card 1
 **Question:** ...
 **Answer:** ...
 
-### Card 2
-**Question:** ...
-**Answer:** ...
-
 Focus on important concepts.
 
-Only use information from the notes.
+Only use information supported by the study material.
 
 STUDY MATERIAL:
 
 {notes}
 """
 
-        with st.spinner(
-            "🃏 Creating flashcards..."
-        ):
+            with st.spinner(
+                "🃏 Creating flashcards..."
+            ):
 
-            answer = ask_ai(prompt)
+                answer = ask_ai(prompt)
 
-        if answer:
+            if answer:
 
-            st.subheader(
-                "🃏 Flashcards"
-            )
+                st.subheader(
+                    "🃏 Flashcards"
+                )
 
-            st.markdown(answer)
+                st.markdown(answer)
 
+    # ========================================================
+    # QUIZ
+    # ========================================================
 
-# =========================
-# QUIZ
-# =========================
+    elif mode == "Create a quiz":
 
-elif uploaded_file and mode == "Create a quiz":
+        if st.button("❓ Generate Quiz"):
 
-    if st.button(
-        "❓ Generate Quiz"
-    ):
-
-        prompt = f"""
+            prompt = f"""
 You are an expert teacher.
 
 Create a {num_questions}-question practice quiz
-using ONLY the study material below.
+based ONLY on the study material.
 
 Use a mixture of:
 - Multiple choice
 - True/false
 - Short answer
 
-Do not give the answer directly after each question.
+Do not provide answers immediately after each question.
 
 At the end create:
 
@@ -389,35 +403,32 @@ STUDY MATERIAL:
 {notes}
 """
 
-        with st.spinner(
-            "❓ Creating quiz..."
-        ):
+            with st.spinner(
+                "❓ Creating quiz..."
+            ):
 
-            answer = ask_ai(prompt)
+                answer = ask_ai(prompt)
 
-        if answer:
+            if answer:
 
-            st.subheader(
-                "❓ Practice Quiz"
-            )
+                st.subheader(
+                    "❓ Practice Quiz"
+                )
 
-            st.markdown(answer)
+                st.markdown(answer)
 
+    # ========================================================
+    # STUDY GUIDE
+    # ========================================================
 
-# =========================
-# STUDY GUIDE
-# =========================
+    elif mode == "Study guide":
 
-elif uploaded_file and mode == "Study guide":
+        if st.button("📖 Create Study Guide"):
 
-    if st.button(
-        "📖 Create Study Guide"
-    ):
-
-        prompt = f"""
+            prompt = f"""
 You are an expert study coach.
 
-Turn these notes into a clear study guide.
+Turn the following material into a clear study guide.
 
 Include:
 
@@ -429,31 +440,30 @@ Include:
 6. Things to memorize
 7. Final review
 
-Only use information supported by the notes.
+Only use information supported by the study material.
 
 STUDY MATERIAL:
 
 {notes}
 """
 
-        with st.spinner(
-            "📖 Creating study guide..."
-        ):
+            with st.spinner(
+                "📖 Creating study guide..."
+            ):
 
-            answer = ask_ai(prompt)
+                answer = ask_ai(prompt)
 
-        if answer:
+            if answer:
 
-            st.subheader(
-                "📖 Study Guide"
-            )
+                st.subheader(
+                    "📖 Study Guide"
+                )
 
-            st.markdown(answer)
+                st.markdown(answer)
 
-
-# =========================
+# ============================================================
 # ASK STUDY BUDDY
-# =========================
+# ============================================================
 
 st.divider()
 
@@ -465,13 +475,12 @@ question = st.text_input(
     "Ask a question about your uploaded notes:"
 )
 
-
 if question:
 
     if not uploaded_file:
 
         st.warning(
-            "📄 Upload a PDF first."
+            "📄 Please upload your notes or PDF first."
         )
 
     else:
@@ -508,13 +517,12 @@ STUDENT QUESTION:
 
             st.markdown(answer)
 
-
-# =========================
+# ============================================================
 # FOOTER
-# =========================
+# ============================================================
 
 st.divider()
 
 st.caption(
-    "📚 AI Study Buddy"
+    "📚 AI Study Buddy • Powered by Google Gemini"
 )
